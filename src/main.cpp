@@ -108,7 +108,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     HWND hwnd = CreateWindowExW(
         WS_EX_ACCEPTFILES,                     // enable drag-and-drop
         wc.lpszClassName,
-        L"Win32 Inspector",
+        L"PExplore",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         1400, 860,
@@ -128,7 +128,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.IniFilename  = "win32inspector.ini";
+    io.IniFilename  = "pexplore.ini";
 
     // Dark theme with some tweaks
     ImGui::StyleColorsDark();

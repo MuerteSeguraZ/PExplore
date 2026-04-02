@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Win32Inspector VERSION 1.0.0 LANGUAGES CXX)
+project(PExplore VERSION 1.0.0 LANGUAGES CXX)
 
 # ── Language standard ─────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD          17)
@@ -39,7 +39,7 @@ set(IMGUI_SOURCES
 )
 
 # ── Main executable ───────────────────────────────────────────────────────────
-add_executable(Win32Inspector WIN32
+add_executable(PExplore WIN32
     src/main.cpp
     src/pe_parser.cpp
     src/disassembler.cpp
@@ -47,13 +47,13 @@ add_executable(Win32Inspector WIN32
     ${IMGUI_SOURCES}
 )
 
-target_include_directories(Win32Inspector PRIVATE
+target_include_directories(PExplore PRIVATE
     include/
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
 
-target_link_libraries(Win32Inspector PRIVATE
+target_link_libraries(PExplore PRIVATE
     capstone
     d3d11
     dxgi
@@ -64,11 +64,11 @@ target_link_libraries(Win32Inspector PRIVATE
 
 # Enable high-DPI awareness manifest
 if (MSVC)
-    target_sources(Win32Inspector PRIVATE
+    target_sources(PExplore PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/resources/dpi.manifest
     )
     # Silence MSVC's "secure CRT" warnings; the code is already bounds-checked.
-    target_compile_definitions(Win32Inspector PRIVATE
+    target_compile_definitions(PExplore PRIVATE
         _CRT_SECURE_NO_WARNINGS
         NOMINMAX
     )

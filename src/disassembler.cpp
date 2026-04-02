@@ -57,6 +57,18 @@ static bool insn_is_nop(const cs_insn* i) {
             i->id == X86_INS_FNOP);
 }
 
+// Extract an immediate call/jmp target VA from Capstone detail.
+// Returns 0 for indirect (call rax, call [rip+x], etc.)
+static uint64_t extract_call_target(const cs_insn* i) {
+    const cs_x86& x86 = i->detail->x86;
+    for (uint8_t op = 0; op < x86.op_count; ++op) {
+        const cs_x86_op& o = x86.operands[op];
+        if (o.type == X86_OP_IMM)
+            return static_cast<uint64_t>(o.imm);
+    }
+    return 0; // indirect / unresolved
+}
+
 DisasmResult Disassembler::disassemble(const uint8_t* buf,
                                         size_t         buf_size,
                                         uint64_t       virtual_addr,
@@ -107,6 +119,10 @@ DisasmResult Disassembler::disassemble(const uint8_t* buf,
         inst.is_jmp  = insn_is_jmp(&ci);
         inst.is_jcc  = insn_is_jcc(&ci);
         inst.is_nop  = insn_is_nop(&ci);
+
+        // Resolve call/jmp target for graph + xref work
+        if (inst.is_call || inst.is_jmp)
+            inst.call_target = extract_call_target(&ci);
 
         result.instructions.push_back(std::move(inst));
 

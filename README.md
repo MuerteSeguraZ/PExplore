@@ -1,9 +1,9 @@
 # PExplore
 
-![windows](https://img.shields.io/badge/platform-windows-blue)
-![c++](https://img.shields.io/badge/language-c++-brightgreen)
-![imgui](https://img.shields.io/badge/ui-imgui-lightgrey)
-![license](https://img.shields.io/badge/license-mit-green)
+![Windows](https://img.shields.io/badge/platform-Windows-blue)
+![C++](https://img.shields.io/badge/language-C++-brightgreen)
+![Imgui](https://img.shields.io/badge/ui-Imgui-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 > PE file inspector and disassembler.
 
@@ -59,7 +59,7 @@ then:
 
 ## Screenshot
 
-![PExplore in NTDLL](image.png)
+(image.png)
 
 ---
 

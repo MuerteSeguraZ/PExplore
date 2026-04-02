@@ -59,7 +59,7 @@ then:
 
 ## Screenshot
 
-(image.png)
+![PExplore in NTDLL](resources/image.png)
 
 ---
 

@@ -1057,6 +1057,10 @@ std::string PseudoCodeGenerator::convert_instruction(const Instruction& inst,
         if (operands.size() >= 2) {
             std::string op1 = simplify_operand(operands[0]);
             std::string op2 = simplify_operand(operands[1]);
+            // If next instruction is a jcc, suppress this line — jcc will fold it in
+            if (inst_idx + 1 < context.instructions.size() &&
+                context.instructions[inst_idx + 1].is_jcc)
+                return "";
             out << "// cmp " << op1 << ", " << op2 << " (sets flags)";
             return out.str();
         }
@@ -1066,6 +1070,10 @@ std::string PseudoCodeGenerator::convert_instruction(const Instruction& inst,
         if (operands.size() >= 2) {
             std::string op1 = simplify_operand(operands[0]);
             std::string op2 = simplify_operand(operands[1]);
+            // If next instruction is a jcc, suppress — jcc will fold it in
+            if (inst_idx + 1 < context.instructions.size() &&
+                context.instructions[inst_idx + 1].is_jcc)
+                return "";
             out << "// test " << op1 << ", " << op2 << " (sets flags)";
             return out.str();
         }
@@ -1075,13 +1083,59 @@ std::string PseudoCodeGenerator::convert_instruction(const Instruction& inst,
     // Conditional & Unconditional Jumps
     // ============================================================
     if (inst.is_jcc) {
-        std::ostringstream target;
+        // Build the jump target string
+        std::string target_str;
         if (inst.call_target != 0) {
-            target << ".L" << std::hex << inst.call_target;
-            out << "if (" << condition_name(mn) << ") goto " << target.str() << ";";
+            std::ostringstream t;
+            t << ".L" << std::hex << inst.call_target;
+            target_str = t.str();
         } else {
-            out << "if (" << condition_name(mn) << ") goto " << inst.op_str << ";";
+            target_str = inst.op_str;
         }
+    
+        // Look back for a preceding cmp/test to build a readable condition
+        if (inst_idx > 0) {
+            const auto& prev = context.instructions[inst_idx - 1];
+            auto prev_ops = parse_operands(prev.op_str);
+    
+            if (prev.mnemonic == "cmp" && prev_ops.size() >= 2) {
+                std::string lhs = simplify_operand(prev_ops[0]);
+                std::string rhs = simplify_operand(prev_ops[1]);
+                std::string cmp_op;
+                if      (mn=="je"  || mn=="jz")                  cmp_op = "==";
+                else if (mn=="jne" || mn=="jnz")                 cmp_op = "!=";
+                else if (mn=="jl"  || mn=="jnge")                cmp_op = "<";
+                else if (mn=="jle" || mn=="jng")                 cmp_op = "<=";
+                else if (mn=="jg"  || mn=="jnle")                cmp_op = ">";
+                else if (mn=="jge" || mn=="jnl")                 cmp_op = ">=";
+                else if (mn=="jb"  || mn=="jnae" || mn=="jc")    cmp_op = "<";
+                else if (mn=="jbe" || mn=="jna")                  cmp_op = "<=";
+                else if (mn=="ja"  || mn=="jnbe")                 cmp_op = ">";
+                else if (mn=="jae" || mn=="jnb"  || mn=="jnc")   cmp_op = ">=";
+                if (!cmp_op.empty()) {
+                    out << "if (" << lhs << " " << cmp_op << " " << rhs << ") goto " << target_str << ";";
+                    return out.str();
+                }
+            }
+    
+            if (prev.mnemonic == "test" && prev_ops.size() >= 2) {
+                std::string lhs = simplify_operand(prev_ops[0]);
+                std::string rhs = simplify_operand(prev_ops[1]);
+                bool same = (lhs == rhs);
+                if (same) {
+                    if      (mn=="je"  || mn=="jz")  { out << "if (" << lhs << " == 0) goto " << target_str << ";"; return out.str(); }
+                    else if (mn=="jne" || mn=="jnz") { out << "if (" << lhs << " != 0) goto " << target_str << ";"; return out.str(); }
+                    else if (mn=="js")               { out << "if (" << lhs << " < 0) goto "  << target_str << ";"; return out.str(); }
+                    else if (mn=="jns")              { out << "if (" << lhs << " >= 0) goto " << target_str << ";"; return out.str(); }
+                } else {
+                    if      (mn=="je"  || mn=="jz")  { out << "if ((" << lhs << " & " << rhs << ") == 0) goto " << target_str << ";"; return out.str(); }
+                    else if (mn=="jne" || mn=="jnz") { out << "if ((" << lhs << " & " << rhs << ") != 0) goto " << target_str << ";"; return out.str(); }
+                }
+            }
+        }
+    
+        // Fallback: raw flags condition
+        out << "if (" << condition_name(mn) << ") goto " << target_str << ";";
         return out.str();
     }
 
@@ -1466,6 +1520,103 @@ std::string PseudoCodeGenerator::convert_instruction(const Instruction& inst,
             return out.str();
         }
     }
+
+    // ============================================================
+    // Debug / Trap
+    // ============================================================
+    if (mn == "int3") {
+        out << "__debugbreak();";
+        return out.str();
+    }
+
+    if (mn == "ud2") {
+        out << "__unreachable();  // ud2 — guaranteed fault";
+        return out.str();
+    }
+
+    if (mn == "int") {
+        std::string vec = operands.size() > 0 ? operands[0] : "?";
+        out << "interrupt(0x" << vec << ");";
+        return out.str();
+    }
+
+    if (mn == "hlt") {
+        out << "halt();  // halt processor";
+        return out.str();
+    }
+
+    // ============================================================
+    // Timestamp / CPU info
+    // ============================================================
+    if (mn == "rdtsc") {
+        out << "timestamp = rdtsc();  // edx:eax";
+        return out.str();
+    }
+
+    if (mn == "rdtscp") {
+        out << "timestamp = rdtscp(&proc_id);  // edx:eax, ecx=proc";
+        return out.str();
+    }
+
+    if (mn == "rdpmc") {
+        out << "perf_counter = rdpmc();";
+        return out.str();
+    }
+
+    // ============================================================
+    // Cache / Memory hints
+    // ============================================================
+    if (mn == "clflush" || mn == "clflushopt") {
+        std::string addr = operands.size() > 0 ? simplify_operand(operands[0]) : "?";
+        out << "cache_flush(" << addr << ");";
+        return out.str();
+    }
+
+    if (mn == "clwb") {
+        std::string addr = operands.size() > 0 ? simplify_operand(operands[0]) : "?";
+        out << "cache_writeback(" << addr << ");";
+        return out.str();
+    }
+
+    // ============================================================
+    // Sign/Zero extension
+    // ============================================================
+    if (mn == "cbw")  { out << "a = (int16_t)(int8_t)a;   // sign-extend al -> ax";  return out.str(); }
+    if (mn == "cwde") { out << "a = (int32_t)(int16_t)a;  // sign-extend ax -> eax"; return out.str(); }
+    if (mn == "cdqe") { out << "a = (int64_t)(int32_t)a;  // sign-extend eax -> rax"; return out.str(); }
+    if (mn == "cwd")  { out << "d:a = (int32_t)(int16_t)a;  // sign-extend ax -> dx:ax";  return out.str(); }
+    if (mn == "cdq")  { out << "d:a = (int64_t)(int32_t)a;  // sign-extend eax -> edx:eax"; return out.str(); }
+    if (mn == "cqo")  { out << "d:a = (int128_t)(int64_t)a; // sign-extend rax -> rdx:rax"; return out.str(); }
+
+    // ============================================================
+    // REP / string prefixes
+    // ============================================================
+    if (mn == "rep"   || mn == "repe"  || mn == "repz" ||
+        mn == "repne" || mn == "repnz") {
+        out << "// " << mn << " { ... }  // repeat c times";
+        return out.str();
+    }
+
+    // ============================================================
+    // LOCK prefix (shows up as standalone mnemonic in some decoders)
+    // ============================================================
+    if (mn == "lock") {
+        out << "// atomic {";
+        return out.str();
+    }
+
+    // ============================================================
+    // Flags manipulation
+    // ============================================================
+    if (mn == "clc")  { out << "CF = 0;  // clear carry";    return out.str(); }
+    if (mn == "stc")  { out << "CF = 1;  // set carry";      return out.str(); }
+    if (mn == "cmc")  { out << "CF ^= 1; // complement carry"; return out.str(); }
+    if (mn == "cld")  { out << "DF = 0;  // clear direction"; return out.str(); }
+    if (mn == "std")  { out << "DF = 1;  // set direction";   return out.str(); }
+    if (mn == "cli")  { out << "IF = 0;  // disable interrupts"; return out.str(); }
+    if (mn == "sti")  { out << "IF = 1;  // enable interrupts";  return out.str(); }
+    if (mn == "lahf") { out << "a_hi = flags & 0xFF;  // load flags -> ah"; return out.str(); }
+    if (mn == "sahf") { out << "flags = (flags & ~0xFF) | a_hi;  // store ah -> flags"; return out.str(); }
 
     // ============================================================
     // Default: Unknown instruction

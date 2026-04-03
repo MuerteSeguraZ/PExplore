@@ -44,6 +44,8 @@ add_executable(PExplore WIN32
     src/pe_parser.cpp
     src/disassembler.cpp
     src/app.cpp
+    src/pseudo_code_gen.cpp
+    src/dll_loader.cpp
     ${IMGUI_SOURCES}
 )
 

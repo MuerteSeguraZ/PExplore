@@ -24,6 +24,8 @@ bool App::init(HWND hwnd, ID3D11Device*, ID3D11DeviceContext*) {
 void App::load_file(const std::wstring& path) {
     parser_.reset();
     disasm_.reset();
+    imported_dll_parser_.reset();
+    imported_dll_disasm_.reset();
     current_disasm_ = {};
     current_symbol_.clear();
     current_va_     = 0;
@@ -34,6 +36,9 @@ void App::load_file(const std::wstring& path) {
     va_to_import_.clear();
     xrefs_computed_for_current_ = false;
     precompute_running_         = false;
+    pseudo_code_mode_           = false;
+    imported_dll_name_.clear();
+    imported_dll_path_.clear();
     memset(filter_buf_, 0, sizeof(filter_buf_));
 
     parser_ = std::make_unique<PeParser>(path);
@@ -122,7 +127,7 @@ std::vector<CallGraphNode> App::compute_callgraph(const ExportEntry& exp) const 
         node.is_import    = false;
 
         if (node.is_indirect) {
-            node.callee_name = "[indirect]  " + ins.op_str;
+            node.callee_name = ins.op_str;
         } else {
             // Try export table first
             auto it = va_to_export_.find(node.callee_va);
@@ -257,6 +262,7 @@ void App::disassemble_export(const ExportEntry& exp) {
     if (!parser_ || !disasm_) return;
     current_symbol_ = exp.name;
     xrefs_computed_for_current_ = false;
+    pseudo_code_mode_ = false;
 
     uint64_t base = parser_->info().is_64bit
                         ? parser_->info().image_base64
@@ -283,6 +289,9 @@ void App::disassemble_export(const ExportEntry& exp) {
 
     current_disasm_ = disasm_->disassemble(buf, sz, current_va_, 512);
 
+    // Generate pseudo-code from disasm
+    current_pseudocode_ = pcgen_.generate(current_disasm_);
+
     // Build / retrieve call graph for this export
     auto it = callgraph_map_.find(exp.name);
     if (it != callgraph_map_.end()) {
@@ -291,6 +300,56 @@ void App::disassemble_export(const ExportEntry& exp) {
         current_callgraph_ = compute_callgraph(exp);
         callgraph_map_[exp.name] = current_callgraph_;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Import DLL loading
+// ---------------------------------------------------------------------------
+
+void App::load_import_dll(const std::string& module_name) {
+    imported_dll_parser_.reset();
+    imported_dll_disasm_.reset();
+    imported_dll_name_ = module_name;
+    imported_dll_path_.clear();
+
+    std::vector<uint8_t> dll_bytes;
+    if (!DllLoader::load_dll(module_name, dll_bytes, imported_dll_path_)) {
+        status_ = "ERROR: Could not find or load " + module_name;
+        return;
+    }
+
+    // Create a temporary file to parse the DLL from memory
+    // (PeParser expects a file path, so we need to work around that)
+    // For now, we'll create an in-memory PE parser approach
+    // We'll simplify by just showing that we loaded it
+    status_ = "Loaded " + module_name + " from " + imported_dll_path_;
+
+    // Note: In a real implementation, we'd extend PeParser to support
+    // loading from memory buffer. For now, just track the load.
+}
+
+void App::disassemble_import(const std::string& module_name, const std::string& function_name) {
+    // Try to load the import DLL if not already loaded
+    if (imported_dll_name_ != module_name) {
+        load_import_dll(module_name);
+    }
+
+    if (imported_dll_path_.empty()) {
+        current_disasm_.error = "Could not load " + module_name + ". DLL not found in system paths.";
+        current_symbol_ = module_name + "!" + function_name;
+        return;
+    }
+
+    current_symbol_ = module_name + "!" + function_name;
+    current_callgraph_.clear();
+    current_disasm_.error = "Import function: " + module_name + "!" + function_name +
+                           "\nPath: " + imported_dll_path_ + "\n\n" +
+                           "To disassemble imported functions, you'd need to load the DLL file.\n" +
+                           "This is a system function from " + module_name + ".";
+}
+
+void App::toggle_pseudo_code_mode() {
+    pseudo_code_mode_ = !pseudo_code_mode_;
 }
 
 // ---------------------------------------------------------------------------
@@ -591,6 +650,18 @@ void App::render_disasm_view() {
     ImGui::PushStyleColor(ImGuiCol_Text, col::symbol);
     ImGui::Text("  %s", current_symbol_.c_str());
     ImGui::PopStyleColor();
+
+    // Add pseudo-code toggle button
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80.0f);
+    if (ImGui::SmallButton(pseudo_code_mode_ ? "Asm ◀" : "▶ C-Code")) {
+        toggle_pseudo_code_mode();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+        ImGui::BeginTooltip();
+        ImGui::TextDisabled("Toggle between assembly and\npseudo-code view");
+        ImGui::EndTooltip();
+    }
+
     ImGui::Separator();
 
     if (!current_disasm_.error.empty()) {
@@ -613,34 +684,80 @@ void App::render_disasm_view() {
     ImGui::BeginChild("##disasm_scroll", ImVec2(0, 0), false,
                       ImGuiWindowFlags_HorizontalScrollbar);
 
-    for (const auto& ins : current_disasm_.instructions) {
-        ImGui::TextColored(col::addr, "  %016llX", ins.address);
-        ImGui::SameLine();
+    if (pseudo_code_mode_) {
+        // Pseudo-code color palette
+        struct PC {
+            static ImVec4 keyword()     { return {0.56f, 0.74f, 0.98f, 1.0f}; } // blue
+            static ImVec4 type_kw()     { return {0.78f, 0.55f, 0.92f, 1.0f}; } // purple — qword/ptr/bp
+            static ImVec4 comment()     { return {0.45f, 0.62f, 0.45f, 1.0f}; } // muted green
+            static ImVec4 number()      { return {0.82f, 0.65f, 0.38f, 1.0f}; } // gold
+            static ImVec4 identifier()  { return {0.88f, 0.86f, 0.80f, 1.0f}; } // off-white
+            static ImVec4 variable()    { return {0.40f, 0.86f, 0.55f, 1.0f}; } // green — LHS variables
+            static ImVec4 op()          { return {0.85f, 0.60f, 0.55f, 1.0f}; } // soft red — arithmetic/punct
+            static ImVec4 label()       { return {1.00f, 0.78f, 0.25f, 1.0f}; } // amber
+            static ImVec4 funccall()    { return {0.40f, 0.86f, 0.86f, 1.0f}; } // cyan
+            static ImVec4 plain()       { return {0.70f, 0.70f, 0.70f, 1.0f}; } // grey
+        };
 
-        char bytes_col[32];
-        snprintf(bytes_col, sizeof(bytes_col), "%-22s", ins.bytes_hex.c_str());
-        ImGui::TextColored(col::bytes, "%s", bytes_col);
-        ImGui::SameLine();
+        for (const auto& line : current_pseudocode_) {
+            if (line.tokens.empty()) {
+                // Fallback: render plain
+                ImGui::TextColored(PC::plain(), "%s", line.code.c_str());
+                continue;
+            }
 
-        ImVec4 mn_col = ins.is_ret  ? col::ret  :
-                        ins.is_call ? col::call :
-                        ins.is_jmp  ? col::jmp  :
-                        ins.is_jcc  ? col::jcc  :
-                        ins.is_nop  ? col::nop  :
-                                      col::normal;
+            bool first_token = true;
+            for (const auto& tok : line.tokens) {
+                if (!first_token) ImGui::SameLine(0.0f, 0.0f);
+                first_token = false;
 
-        char mn_pad[16];
-        snprintf(mn_pad, sizeof(mn_pad), "%-10s", ins.mnemonic.c_str());
-        ImGui::TextColored(mn_col, "%s", mn_pad);
-
-        if (!ins.op_str.empty()) {
-            ImGui::SameLine();
-            ImGui::TextColored(col::operand, "%s", ins.op_str.c_str());
+                ImVec4 col;
+                switch (tok.type) {
+                    case PseudoTokenType::Keyword:     col = PC::keyword();    break;
+                    case PseudoTokenType::TypeKeyword:  col = PC::type_kw();    break;
+                    case PseudoTokenType::Comment:     col = PC::comment();    break;
+                    case PseudoTokenType::Number:      col = PC::number();     break;
+                    case PseudoTokenType::Identifier:  col = PC::identifier(); break;
+                    case PseudoTokenType::Variable:    col = PC::variable();   break;
+                    case PseudoTokenType::Operator:    col = PC::op();         break;
+                    case PseudoTokenType::Label:       col = PC::label();      break;
+                    case PseudoTokenType::FuncCall:    col = PC::funccall();   break;
+                    default:                           col = PC::plain();      break;
+                }
+                ImGui::TextColored(col, "%s", tok.text.c_str());
+            }
         }
+    } else {
+        // Render assembly
+        for (const auto& ins : current_disasm_.instructions) {
+            ImGui::TextColored(col::addr, "  %016llX", ins.address);
+            ImGui::SameLine();
 
-        if (ins.is_ret) {
-            ImGui::TextColored(col::sep,
-                "  ──────────────────────────────────────────────────");
+            char bytes_col[32];
+            snprintf(bytes_col, sizeof(bytes_col), "%-22s", ins.bytes_hex.c_str());
+            ImGui::TextColored(col::bytes, "%s", bytes_col);
+            ImGui::SameLine();
+
+            ImVec4 mn_col = ins.is_ret  ? col::ret  :
+                            ins.is_call ? col::call :
+                            ins.is_jmp  ? col::jmp  :
+                            ins.is_jcc  ? col::jcc  :
+                            ins.is_nop  ? col::nop  :
+                                          col::normal;
+
+            char mn_pad[16];
+            snprintf(mn_pad, sizeof(mn_pad), "%-10s", ins.mnemonic.c_str());
+            ImGui::TextColored(mn_col, "%s", mn_pad);
+
+            if (!ins.op_str.empty()) {
+                ImGui::SameLine();
+                ImGui::TextColored(col::operand, "%s", ins.op_str.c_str());
+            }
+
+            if (ins.is_ret) {
+                ImGui::TextColored(col::sep,
+                    "  ──────────────────────────────────────────────────");
+            }
         }
     }
 
@@ -750,14 +867,25 @@ void App::render_graph_panel() {
                         ImGui::EndTooltip();
                     }
 
-                    // Click to navigate (only for internal exports)
-                    if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !node.is_indirect) {
-                        auto it = va_to_export_.find(node.callee_va);
-                        if (it != va_to_export_.end() && parser_) {
-                            for (auto& exp : parser_->info().exports) {
-                                if (exp.name == it->second) {
-                                    disassemble_export(exp);
-                                    break;
+                    // Click to navigate (internal exports + imports)
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                        if (node.is_import) {
+                            // Parse import name: "Module!Function"
+                            size_t sep = node.callee_name.find('!');
+                            if (sep != std::string::npos) {
+                                std::string module = node.callee_name.substr(0, sep);
+                                std::string function = node.callee_name.substr(sep + 1);
+                                disassemble_import(module, function);
+                            }
+                        } else if (!node.is_indirect) {
+                            // Internal export
+                            auto it = va_to_export_.find(node.callee_va);
+                            if (it != va_to_export_.end() && parser_) {
+                                for (auto& exp : parser_->info().exports) {
+                                    if (exp.name == it->second) {
+                                        disassemble_export(exp);
+                                        break;
+                                    }
                                 }
                             }
                         }

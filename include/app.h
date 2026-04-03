@@ -8,6 +8,8 @@
 #include <vector>
 #include "pe_parser.h"
 #include "disassembler.h"
+#include "pseudo_code_gen.h"
+#include "dll_loader.h"
 
 namespace inspector {
 
@@ -45,6 +47,13 @@ private:
     // ── Actions ───────────────────────────────────────────────────────────
     void disassemble_export(const ExportEntry& exp);
     void open_file_dialog();
+
+    // ── Import DLL handling ───────────────────────────────────────────────
+    void load_import_dll(const std::string& module_name);
+    void disassemble_import(const std::string& module_name, const std::string& function_name);
+
+    // ── Pseudo-code ───────────────────────────────────────────────────────
+    void toggle_pseudo_code_mode();
 
     // ── Graph / XREF helpers ──────────────────────────────────────────────
     // Build a VA→export-name lookup (computed once per file load)
@@ -93,6 +102,17 @@ private:
     // UI options
     bool   precompute_xrefs_   = false;        // checkbox
     bool   precompute_running_ = false;        // guard against re-entry
+
+    // ── Pseudo-code mode ──────────────────────────────────────────────────
+    bool                              pseudo_code_mode_   = false;
+    std::vector<PseudoCodeLine>       current_pseudocode_;
+    PseudoCodeGenerator               pcgen_;
+
+    // ── Imported DLL handling ─────────────────────────────────────────────
+    std::unique_ptr<PeParser>         imported_dll_parser_;  // Parser for loaded import DLL
+    std::unique_ptr<Disassembler>     imported_dll_disasm_;  // Disassembler for import DLL
+    std::string                       imported_dll_name_;    // Name of currently loaded import DLL
+    std::string                       imported_dll_path_;    // Full path of loaded DLL
 };
 
 } // namespace inspector

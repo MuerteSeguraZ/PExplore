@@ -19,6 +19,8 @@ It provides a fast, minimal interface to explore:
 * imports
 * sections
 * disassembled code
+* xrefs
+* call graphs
 
 ---
 
@@ -31,6 +33,8 @@ It provides a fast, minimal interface to explore:
 * fast symbol filtering
 * drag & drop support
 * simple disassembler view (colored, readable)
+* xref / call graph panel
+* generate c pseudo-code
 
 ---
 
@@ -46,6 +50,7 @@ then:
 
 * Browse exports/imports/sections on the left
 * Click an exported function to disassemble it
+* See XREFs / Calls on the right
 
 ---
 
@@ -54,6 +59,8 @@ then:
 * `PeParser` → parses PE headers and tables
 * `Disassembler` → decodes instructions
 * `App` → UI + interaction (ImGui)
+* `PseudoCode Gen` → Generate C pseudo-code from ASM
+* `DllLoader` → Search system dirs for DLLs
 
 ---
 
